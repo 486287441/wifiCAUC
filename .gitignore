@@ -1,0 +1,52 @@
+# ── 凭据与本地配置（切勿提交）──
+config.local.yaml
+config.local.yml
+config.yaml
+config.yml
+*.local.yaml
+*.local.yml
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+账号密码.md
+**/credentials*.yaml
+**/credentials*.json
+
+# ── 运行时状态 ──
+state/*
+!state/.gitkeep
+
+# ── Python ──
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+pip-wheel-metadata/
+
+# ── Playwright ──
+playwright-report/
+test-results/
+
+# ── macOS / IDE ──
+.DS_Store
+.AppleDouble
+.LSOverride
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── 本地对话产物（非发布内容）──
+对话 html/

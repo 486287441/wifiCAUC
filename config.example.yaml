@@ -1,0 +1,27 @@
+wifi:
+  ssid: "CAUC-WIFI"
+  interface: "auto"          # auto = 自动找 Wi-Fi 网卡
+  ssid_match: "normalized"   # CAUC-WIFI 与 caucwifi 视为相同；严格匹配用 strict
+  fallback_portal_detect: true  # Clash 下读不到 SSID 时，能打开门户即视为在校园网
+
+portal:
+  url: "http://192.168.4.252/"
+  selectors:
+    username: 'input[name="DDDDD"][type="text"]'
+    password: 'input[name="upass"][type="password"]'
+    submit: 'input[name="0MKKey"]'
+  success_text: "您已经成功登录"
+
+credentials:
+  username: "学号或账号"
+  password: "密码"
+
+runtime:
+  poll_interval_seconds: 20
+  connectivity_urls:
+    - "http://captive.apple.com/hotspot-detect.html"
+  headless: true
+  portal_timeout_seconds: 30
+  connectivity_timeout_seconds: 3
+  connectivity_bind_wifi: true   # 探测绑定 Wi-Fi 源 IP
+  clash_compatible: true         # 与 Clash 共存：只信校园门户页，不信 captive 检测
