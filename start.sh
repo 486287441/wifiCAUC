@@ -107,6 +107,10 @@ case "$CMD" in
     echo ""
     "$PYTHON" -m wificauc.main once --force
     ;;
+  notify-test)
+    log "发送测试通知（不登录）"
+    "$PYTHON" -c "from wificauc.notify import notify_test; import sys; sys.exit(0 if notify_test() else 1)"
+    ;;
   once|"")
     log "开始：检测 WiFi / 门户，需要时自动登录"
     echo ""
@@ -114,7 +118,7 @@ case "$CMD" in
     ;;
   *)
     warn "未知参数: $CMD"
-    echo "用法: $0 [once|check|force|test]"
+    echo "用法: $0 [once|check|force|notify-test|test]"
     exit 1
     ;;
 esac

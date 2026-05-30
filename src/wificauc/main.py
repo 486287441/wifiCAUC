@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import os
 import sys
+import time
 
 from wificauc.clash import is_clash_running
 from wificauc.config import AppConfig, load_config
@@ -12,13 +13,35 @@ from wificauc.connectivity import (
     portal_host_from_url,
     probe_portal_reachable,
 )
+from wificauc.notify import notify_failure, notify_success
 from wificauc.portal import login as portal_login
+from wificauc.state import (
+    clear_paused,
+    is_paused,
+    read_last_run,
+    read_paused,
+    set_paused,
+    write_last_run,
+)
 from wificauc.wifi import (
     get_current_ssid,
     get_interface_ipv4,
     is_target_wifi,
     resolve_wifi_interface,
 )
+
+
+def ssid_just_joined_target(
+    last_ssid: str | None,
+    current_ssid: str | None,
+    target_ssid: str,
+    *,
+    match_mode: str,
+) -> bool:
+    """True when SSID transitions from non-target to target (incl. first poll)."""
+    on_target = is_target_wifi(current_ssid, target_ssid, match_mode=match_mode)
+    was_on_target = is_target_wifi(last_ssid, target_ssid, match_mode=match_mode)
+    return on_target and not was_on_target
 
 
 def _on_target_network(
@@ -82,8 +105,7 @@ def decide_once_outcome(
     return "need_portal_login"
 
 
-def cmd_once(args: argparse.Namespace) -> int:
-    cfg = load_config()
+def run_once(cfg: AppConfig, *, force_login: bool = False) -> int:
     wifi_interface = resolve_wifi_interface(cfg.wifi_interface)
     current_ssid = get_current_ssid(wifi_interface)
     bind_ip = (
@@ -91,7 +113,6 @@ def cmd_once(args: argparse.Namespace) -> int:
         if cfg.connectivity_bind_wifi
         else None
     )
-    force_login = getattr(args, "force", False) is True
     on_target, detect_reason = _on_target_network(cfg, current_ssid, bind_ip=bind_ip)
     outcome = decide_once_outcome(
         cfg, current_ssid, bind_ip=bind_ip, force_login=force_login
@@ -120,6 +141,7 @@ def cmd_once(args: argparse.Namespace) -> int:
         print("  hint: 若实际未登录，请用 ./start.sh force 强制尝试门户登录")
         if bind_ip:
             print(f"  bind_ip: {bind_ip}")
+        write_last_run("skipped")
         return 0
 
     print("need_portal_login")
@@ -132,6 +154,18 @@ def cmd_once(args: argparse.Namespace) -> int:
     if bind_ip:
         print(f"  bind_ip: {bind_ip}")
 
+    if is_paused():
+        paused = read_paused()
+        print("login: skipped (paused)")
+        if paused:
+            reason, timestamp = paused
+            if reason:
+                print(f"  reason: {reason}")
+            if timestamp:
+                print(f"  since: {timestamp}")
+        print("  hint: 修复账号密码后执行 python -m wificauc.main resume")
+        return 0
+
     if os.environ.get("WIFICAUC_SKIP_LOGIN") == "1":
         print("login: skipped (WIFICAUC_SKIP_LOGIN=1)")
         return 0
@@ -141,30 +175,101 @@ def cmd_once(args: argparse.Namespace) -> int:
     if result.ok and result.already_logged_in:
         print("login: already_logged_in")
         print("  note: 门户已是登录态，未填写账号或点击登录（不会点注销）")
+        write_last_run("skipped")
         return 0
     if result.ok:
         print("login: success")
         print("  note: 已提交账号密码并完成门户登录")
-        # M04: macOS 通知
+        notify_success()
+        write_last_run("success")
         return 0
 
     print(f"login: failed ({result.reason})")
-    # M04: 通知 + state/paused
+    notify_failure(result.reason)
+    write_last_run("fail")
+    set_paused(result.reason)
     return 1
 
 
+def cmd_once(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    force_login = getattr(args, "force", False) is True
+    return run_once(cfg, force_login=force_login)
+
+
 def cmd_run(_args: argparse.Namespace) -> int:
-    print("run: 尚未实现（M05 常驻模式）", file=sys.stderr)
-    return 0
+    cfg = load_config()
+    wifi_interface = resolve_wifi_interface(cfg.wifi_interface)
+    print(f"run: polling every {cfg.poll_interval_seconds}s (Ctrl+C to stop)")
+    last_ssid: str | None = None
+    try:
+        while True:
+            if is_paused():
+                print(f"run: paused, sleeping {cfg.poll_interval_seconds}s")
+                time.sleep(cfg.poll_interval_seconds)
+                continue
+
+            current_ssid = get_current_ssid(wifi_interface)
+            just_joined = ssid_just_joined_target(
+                last_ssid,
+                current_ssid,
+                cfg.wifi_ssid,
+                match_mode=cfg.wifi_ssid_match,
+            )
+
+            run_once(cfg)
+            last_ssid = current_ssid
+
+            if just_joined:
+                print("run: joined target WiFi, running extra round immediately")
+                run_once(cfg)
+                last_ssid = get_current_ssid(wifi_interface)
+
+            time.sleep(cfg.poll_interval_seconds)
+    except KeyboardInterrupt:
+        print("\nrun: stopped")
+        return 0
 
 
 def cmd_resume(_args: argparse.Namespace) -> int:
-    print("resume: 尚未实现（M04 状态恢复）", file=sys.stderr)
-    return 0
+    cfg = load_config()
+    if clear_paused():
+        print("resume: paused cleared")
+    else:
+        print("resume: not paused")
+    print("resume: running one round...")
+    return run_once(cfg)
 
 
 def cmd_status(_args: argparse.Namespace) -> int:
-    print("status: 尚未实现（M04 状态查询）", file=sys.stderr)
+    cfg = load_config()
+    wifi_interface = resolve_wifi_interface(cfg.wifi_interface)
+    current_ssid = get_current_ssid(wifi_interface)
+
+    if is_paused():
+        paused = read_paused()
+        print("paused: yes")
+        if paused:
+            reason, timestamp = paused
+            if reason:
+                print(f"  reason: {reason}")
+            if timestamp:
+                print(f"  since: {timestamp}")
+    else:
+        print("paused: no")
+
+    last_run = read_last_run()
+    if last_run:
+        print(f"last_run: {last_run['result']} @ {last_run['timestamp']}")
+    else:
+        print("last_run: (none)")
+
+    if current_ssid:
+        print(f"SSID: {current_ssid}")
+    else:
+        print("SSID: (not connected or unknown)")
+    print(f"expected: {cfg.wifi_ssid}")
+    print(f"interface: {wifi_interface}")
     return 0
 
 
@@ -181,9 +286,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="跳过「已上网」检测，强制打开门户尝试登录",
     )
-    sub.add_parser("run", help="常驻轮询模式（占位）")
-    sub.add_parser("resume", help="清除暂停状态后继续（占位）")
-    sub.add_parser("status", help="查看运行状态（占位）")
+    sub.add_parser("run", help="常驻轮询模式")
+    sub.add_parser("resume", help="清除暂停状态后继续")
+    sub.add_parser("status", help="查看运行状态")
 
     return parser
 
